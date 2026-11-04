@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: patchpilot-web
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run start:web
+    healthCheckPath: /api/health
+    envVars:
+      - key: PATCHPILOT_WEB_DEPLOYMENT
+        value: "true"

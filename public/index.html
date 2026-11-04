@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101216">
+    <title>PatchPilot — Code review, made actionable</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="PatchPilot home">
+        <span class="brand-mark">P<span>+</span></span>
+        <span>patchpilot<span class="brand-dot">.</span></span>
+      </a>
+      <div class="topbar-right"><span class="status-dot"></span><span id="config-status">Checking scanner…</span><button id="settings-button" class="settings-button" type="button">API key settings</button></div>
+    </header>
+
+    <main>
+      <section id="settings-panel" class="settings-panel" hidden>
+        <div class="settings-heading">
+          <div><span class="step">SETUP</span><h2>AI provider</h2></div>
+          <button id="close-settings" class="remove-file" type="button" aria-label="Close settings">×</button>
+        </div>
+        <p id="settings-copy" class="settings-copy">Choose the provider that issued your API key. PatchPilot encrypts it with Windows secure storage on this PC.</p>
+        <form id="settings-form" class="settings-form">
+          <label class="key-label" for="provider-select">Provider</label>
+          <select id="provider-select" class="provider-select">
+            <option value="gemini">Google Gemini</option>
+            <option value="groq">GroqCloud</option>
+          </select>
+          <label id="api-key-label" class="key-label" for="api-key-input">Google AI Studio API key</label>
+          <div class="key-row">
+            <input id="api-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Gemini API key">
+            <button class="button button-primary" type="submit">Save key</button>
+          </div>
+        </form>
+        <button id="remove-key" class="remove-key" type="button" hidden>Remove key</button>
+        <p id="settings-message" class="settings-message" aria-live="polite"></p>
+      </section>
+
+      <section class="intro">
+        <div class="eyebrow"><span></span> AI-ASSISTED CODE REVIEW</div>
+        <h1>Find the flaw.<br><span>Keep the control.</span></h1>
+        <p>Scan source code for syntax issues and security risks. Review every suggested change before it touches your code.</p>
+      </section>
+
+      <section class="workspace" aria-label="Code scanner">
+        <div class="workspace-head">
+          <div><span class="step">01</span><h2>Choose source files</h2></div>
+          <span class="file-limit">UP TO 5 FILES · 200 KB EACH</span>
+        </div>
+        <label class="dropzone" id="dropzone" for="file-input" tabindex="0">
+          <input id="file-input" type="file" multiple>
+          <span class="upload-icon" aria-hidden="true">↑</span>
+          <span class="drop-title">Drop code here, or <span>browse files</span></span>
+          <span class="drop-caption">Build a local flowchart for any uploaded text file. JavaScript gets an AST-based map; other languages use a clearly marked best-effort map.</span>
+        </label>
+        <div id="file-list" class="file-list" aria-live="polite"></div>
+        <section id="logic-map-section" class="logic-map-section" hidden aria-label="Code logic flowchart">
+          <div class="logic-map-heading">
+            <div><span class="step">FLOW</span><h3 id="logic-map-title">Code logic map</h3></div>
+            <div class="logic-map-actions">
+              <label class="sr-only" for="logic-map-chart">Choose function flowchart</label>
+              <select id="logic-map-chart" class="logic-map-select"></select>
+              <button id="download-logic-map" class="button button-secondary" type="button">Download SVG</button>
+              <button id="download-mermaid" class="button button-secondary" type="button">Download Mermaid</button>
+              <button id="close-logic-map" class="remove-file" type="button" aria-label="Close logic map">×</button>
+            </div>
+          </div>
+          <p id="logic-map-note" class="audit-note"></p>
+          <div id="logic-map-canvas" class="logic-map-canvas" role="region" aria-label="Scrollable code flowchart" tabindex="0"></div>
+        </section>
+        <div class="actions">
+          <p id="privacy-note" class="privacy-note"><span aria-hidden="true">◇</span> Processed in memory · Never saved by this app</p>
+          <div class="action-buttons">
+            <button id="clear-files" class="button button-secondary" type="button" hidden>Clear files</button>
+            <button id="scan-button" class="button button-primary" disabled><span>Scan code</span><span aria-hidden="true">↗</span></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="local-audit-panel" aria-labelledby="local-audit-title">
+        <div class="workspace-head">
+          <div><span class="step">WEB</span><h2 id="local-audit-title">Local website check</h2></div>
+          <span class="file-limit">LOOPBACK ONLY · READ-ONLY</span>
+        </div>
+        <p class="settings-copy">Crawl a localhost site for basic security headers and cookie settings. This is a passive check: it uses bounded GET requests, follows same-origin links only, and never submits forms or sends exploit payloads.</p>
+        <form id="local-audit-form" class="local-audit-form">
+          <label class="key-label" for="local-audit-url">Local website URL</label>
+          <div class="local-audit-row">
+            <input id="local-audit-url" type="url" required placeholder="http://localhost:3000" autocomplete="url">
+            <button id="local-audit-review" class="button button-secondary" type="submit">Review safety &amp; continue</button>
+          </div>
+        </form>
+        <div id="local-audit-results" class="local-audit-results" aria-live="polite"></div>
+      </section>
+
+      <section id="results-section" class="results-section" hidden>
+        <div class="results-heading">
+          <div><span class="step">02</span><h2>Review results</h2></div>
+          <span id="result-count" class="result-count"></span>
+        </div>
+        <div id="summary-stats" class="summary-stats" aria-label="Scan summary"></div>
+        <div class="results-tools">
+          <div id="severity-filters" class="severity-filters" aria-label="Filter findings by severity">
+            <button class="filter-chip active" type="button" data-severity="all" aria-pressed="true">All</button>
+            <button class="filter-chip" type="button" data-severity="critical" aria-pressed="false">Critical</button>
+            <button class="filter-chip" type="button" data-severity="high" aria-pressed="false">High</button>
+            <button class="filter-chip" type="button" data-severity="medium" aria-pressed="false">Medium</button>
+            <button class="filter-chip" type="button" data-severity="low" aria-pressed="false">Low</button>
+            <button class="filter-chip" type="button" data-severity="info" aria-pressed="false">Info</button>
+          </div>
+          <button id="download-report" class="button button-secondary" type="button">Download JSON report</button>
+        </div>
+        <label class="search-wrap" for="finding-search">
+          <span aria-hidden="true">⌕</span>
+          <input id="finding-search" type="search" placeholder="Search findings or files…" autocomplete="off">
+          <kbd> / </kbd>
+        </label>
+        <div id="results" class="results"></div>
+      </section>
+
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <footer><span>PATCHPILOT <span class="brand-dot">/</span> LOCAL-FIRST WORKFLOW</span><span>AI suggestions can be wrong. Always review before applying.</span></footer>
+    </main>
+    <dialog id="local-audit-confirm" class="confirm-dialog" aria-labelledby="local-audit-confirm-title">
+      <form id="local-audit-confirm-form" method="dialog">
+        <span class="step">LOCAL-ONLY SAFETY CHECK</span>
+        <h2 id="local-audit-confirm-title">Confirm this website is yours to test</h2>
+        <p>The audit will make up to 25 GET requests to <strong id="confirm-target"></strong>, at most two link levels deep. It reads response headers and HTML only.</p>
+        <p class="confirm-warning">It will not submit forms, try passwords, or send attack/injection payloads. Redirects and links outside this exact origin are not followed. Even GET requests can have side effects on poorly designed websites.</p>
+        <label class="confirm-check"><input id="confirm-ownership" type="checkbox"> I own this local website or have permission to test it.</label>
+        <label class="confirm-check"><input id="confirm-passive" type="checkbox"> I understand this is a passive, GET-only check with no payloads or form submissions.</label>
+        <label class="key-label" for="confirm-phrase">Type <strong>LOCALHOST ONLY</strong> to enable the audit</label>
+        <input id="confirm-phrase" class="confirm-phrase" type="text" autocomplete="off" spellcheck="false">
+        <div class="confirm-actions">
+          <button id="cancel-local-audit" class="button button-secondary" type="button">Cancel</button>
+          <button id="confirm-local-audit" class="button button-primary" type="submit" value="confirm" disabled>Start local audit</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

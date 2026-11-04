@@ -1,0 +1,55 @@
+{
+  "name": "patchpilot-ai",
+  "version": "1.7.0",
+  "private": true,
+  "description": "A local, review-first code scanner and fixer powered by Gemini.",
+  "scripts": {
+    "start": "electron .",
+    "start:web": "node server.js",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win dir",
+    "test": "node --test"
+  },
+  "main": "electron-main.js",
+  "build": {
+    "appId": "com.patchpilot.desktop",
+    "productName": "PatchPilot",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron-main.js",
+      "preload.js",
+      "server.js",
+      "package.json",
+      "public/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "PatchPilot-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "acorn": "^8.19.0"
+  }
+}
