@@ -23,27 +23,7 @@ const apiKeyLabel = document.querySelector("#api-key-label");
 const settingsMessage = document.querySelector("#settings-message");
 const settingsCopy = document.querySelector("#settings-copy");
 const removeKeyButton = document.querySelector("#remove-key");
-const localAuditPanel = document.querySelector(".local-audit-panel");
 const privacyNote = document.querySelector("#privacy-note");
-const siteAuditCopy = document.querySelector("#site-audit-copy");
-const localAuditUrlLabel = document.querySelector("#local-audit-url-label");
-const localAuditForm = document.querySelector("#local-audit-form");
-const localAuditUrl = document.querySelector("#local-audit-url");
-const localAuditReviewButton = document.querySelector("#local-audit-review");
-const localAuditResults = document.querySelector("#local-audit-results");
-const localAuditDialog = document.querySelector("#local-audit-confirm");
-const localAuditConfirmForm = document.querySelector("#local-audit-confirm-form");
-const confirmTarget = document.querySelector("#confirm-target");
-const confirmSummary = document.querySelector("#confirm-summary");
-const confirmBadge = document.querySelector("#confirm-badge");
-const confirmWarning = document.querySelector("#confirm-warning");
-const confirmOwnershipLabel = document.querySelector("#confirm-ownership-label");
-const confirmPassiveLabel = document.querySelector("#confirm-passive-label");
-const confirmPhraseLabel = document.querySelector("#confirm-phrase-label");
-const confirmOwnership = document.querySelector("#confirm-ownership");
-const confirmPassive = document.querySelector("#confirm-passive");
-const confirmPhrase = document.querySelector("#confirm-phrase");
-const confirmLocalAuditButton = document.querySelector("#confirm-local-audit");
 const logicMapSection = document.querySelector("#logic-map-section");
 const logicMapTitle = document.querySelector("#logic-map-title");
 const logicMapChartSelect = document.querySelector("#logic-map-chart");
@@ -58,55 +38,15 @@ let activeSeverity = "all";
 let findingQuery = "";
 let scanModel = "";
 let scanProvider = "";
-let pendingLocalAuditUrl = "";
 let activeLogicMap = null;
 let isWebDeployment = false;
 let sessionApiKey = "";
 let sessionProvider = "gemini";
-let pendingSiteChallenge = null;
 
 function showNotice(message, isError = false) {
   notice.textContent = message;
   notice.classList.toggle("error", isError);
   notice.hidden = !message;
-}
-
-function renderLocalAudit(audit) {
-  localAuditResults.replaceChildren();
-  const summary = document.createElement("div");
-  summary.className = "audit-summary";
-  addText(summary, "strong", "", `${audit.pageCount} page${audit.pageCount === 1 ? "" : "s"} checked`);
-  addText(summary, "span", "", `${audit.findings.length} observation${audit.findings.length === 1 ? "" : "s"} · same-origin only${audit.truncated ? ` · ${audit.stopReason}` : ""}`);
-  localAuditResults.append(summary);
-  addText(localAuditResults, "p", "audit-scope", audit.scope);
-
-  for (const page of audit.pages) {
-    const pageSection = document.createElement("section");
-    pageSection.className = "audit-page";
-    const heading = document.createElement("div");
-    heading.className = "audit-page-heading";
-    addText(heading, "strong", "", page.title);
-    addText(heading, "span", "audit-page-status", `${page.status} · ${new URL(page.url).pathname}`);
-    pageSection.append(heading);
-    if (page.redirectNotFollowed) {
-      addText(pageSection, "p", "audit-note", "Redirect was not followed.");
-    }
-    if (!page.findings.length) {
-      addText(pageSection, "p", "audit-note", "No missing baseline headers or cookie flags were noticed on this page.");
-    }
-    for (const finding of page.findings) {
-      const row = document.createElement("article");
-      row.className = "audit-finding";
-      addText(row, "span", `severity severity-${finding.severity}`, finding.severity);
-      const details = document.createElement("div");
-      addText(details, "strong", "", finding.title);
-      addText(details, "p", "finding-copy", finding.description);
-      addText(details, "p", "finding-recommendation", finding.recommendation);
-      row.append(details);
-      pageSection.append(row);
-    }
-    localAuditResults.append(pageSection);
-  }
 }
 
 function formatSize(bytes) {
@@ -417,13 +357,10 @@ function getProviderHeaders() {
   };
 }
 
-async function post(path, body, includeProviderKey = true) {
+async function post(path, body) {
   const response = await fetch(path, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(includeProviderKey ? getProviderHeaders() : {}),
-    },
+    headers: { "Content-Type": "application/json", ...getProviderHeaders() },
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({}));
@@ -864,164 +801,6 @@ removeKeyButton.addEventListener("click", async () => {
   }
 });
 
-localAuditForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  if (!localAuditForm.reportValidity()) return;
-  pendingLocalAuditUrl = localAuditUrl.value.trim();
-  if (isWebDeployment) {
-    prepareSiteOwnershipChallenge();
-    return;
-  }
-  openAuditConfirmation();
-});
-
-function openAuditConfirmation() {
-  confirmTarget.textContent = pendingLocalAuditUrl;
-  const phrase = isWebDeployment ? "I OWN THIS SITE" : "LOCALHOST ONLY";
-  confirmSummary.replaceChildren(
-    document.createTextNode(isWebDeployment
-      ? "The passive check will make up to 8 GET requests to "
-      : "The audit will make up to 25 GET requests to "),
-    confirmTarget,
-    document.createTextNode(isWebDeployment
-      ? ", at most two link levels deep. It reads response headers and HTML only."
-      : ", at most two link levels deep. It reads response headers and HTML only."),
-  );
-  confirmOwnership.checked = false;
-  confirmPassive.checked = false;
-  confirmPhrase.value = "";
-  const phraseLabel = document.createElement("strong");
-  phraseLabel.textContent = phrase;
-  confirmPhraseLabel.replaceChildren(
-    document.createTextNode("Type "),
-    phraseLabel,
-    document.createTextNode(" to enable the check"),
-  );
-  confirmLocalAuditButton.disabled = true;
-  localAuditDialog.showModal();
-}
-
-function addCopyRow(parent, label, value) {
-  const row = document.createElement("div");
-  row.className = "audit-copy-row";
-  addText(row, "strong", "", label);
-  const code = document.createElement("code");
-  code.textContent = value;
-  row.append(code);
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.className = "button button-secondary";
-  copy.textContent = "Copy";
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      copy.textContent = "Copied";
-    } catch (error) {
-      addText(parent, "p", "audit-error", `Could not copy to clipboard: ${error.message}`);
-    }
-  });
-  row.append(copy);
-  parent.append(row);
-}
-
-async function prepareSiteOwnershipChallenge() {
-  localAuditReviewButton.disabled = true;
-  localAuditReviewButton.textContent = "Preparing verification…";
-  localAuditResults.replaceChildren();
-  try {
-    pendingSiteChallenge = {
-      ...(await post("/api/site-audit/challenge", { url: pendingLocalAuditUrl }, false)),
-      url: pendingLocalAuditUrl,
-    };
-    addText(localAuditResults, "p", "audit-note", "To verify that you control this domain, add the following temporary DNS TXT record. DNS changes may take a few minutes to appear.");
-    addCopyRow(localAuditResults, "Record name", pendingSiteChallenge.recordName);
-    addCopyRow(localAuditResults, "TXT value", pendingSiteChallenge.recordValue);
-    addText(localAuditResults, "p", "audit-note", "After the check finishes, remove this TXT record to revoke the verification proof.");
-    const verifyButton = document.createElement("button");
-    verifyButton.type = "button";
-    verifyButton.className = "button button-primary";
-    verifyButton.id = "verify-site-ownership";
-    verifyButton.textContent = "Verify DNS ownership";
-    verifyButton.addEventListener("click", verifySiteOwnership);
-    localAuditResults.append(verifyButton);
-  } catch (error) {
-    pendingSiteChallenge = null;
-    addText(localAuditResults, "p", "audit-error", error.message);
-  } finally {
-    localAuditReviewButton.disabled = false;
-    localAuditReviewButton.textContent = "Prepare ownership verification";
-  }
-}
-
-async function verifySiteOwnership() {
-  if (!pendingSiteChallenge || pendingSiteChallenge.url !== pendingLocalAuditUrl) {
-    showNotice("Prepare a new DNS verification record for this website URL.", true);
-    return;
-  }
-  const verifyButton = document.querySelector("#verify-site-ownership");
-  verifyButton.disabled = true;
-  verifyButton.textContent = "Verifying DNS…";
-  try {
-    await post("/api/site-audit/verify", {
-      url: pendingLocalAuditUrl,
-      token: pendingSiteChallenge.token,
-    }, false);
-    showNotice("Domain ownership verified. Confirm the passive check to continue.");
-    openAuditConfirmation();
-  } catch (error) {
-    addText(localAuditResults, "p", "audit-error", error.message);
-    verifyButton.disabled = false;
-    verifyButton.textContent = "Verify DNS ownership";
-  }
-}
-for (const element of [confirmOwnership, confirmPassive, confirmPhrase]) {
-  element.addEventListener("input", updateLocalAuditConfirmation);
-  element.addEventListener("change", updateLocalAuditConfirmation);
-}
-document.querySelector("#cancel-local-audit").addEventListener("click", () => localAuditDialog.close("cancel"));
-localAuditConfirmForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (
-    !confirmOwnership.checked
-    || !confirmPassive.checked
-    || confirmPhrase.value.trim() !== (isWebDeployment ? "I OWN THIS SITE" : "LOCALHOST ONLY")
-  ) return;
-  localAuditDialog.close("confirmed");
-  await runLocalAudit();
-});
-
-function updateLocalAuditConfirmation() {
-  confirmLocalAuditButton.disabled = !confirmOwnership.checked
-    || !confirmPassive.checked
-    || confirmPhrase.value.trim() !== (isWebDeployment ? "I OWN THIS SITE" : "LOCALHOST ONLY");
-}
-
-async function runLocalAudit() {
-  localAuditReviewButton.disabled = true;
-  localAuditReviewButton.textContent = "Auditing…";
-  localAuditResults.replaceChildren();
-  addText(localAuditResults, "p", "audit-note", isWebDeployment
-    ? "Checking public HTTPS pages and response headers…"
-    : "Checking localhost pages and response headers…");
-  try {
-    const audit = await post(isWebDeployment ? "/api/site-audit" : "/api/local-audit", {
-      url: pendingLocalAuditUrl,
-      confirmLocalOwnership: confirmOwnership.checked,
-      confirmNoPayloads: confirmPassive.checked,
-      confirmationText: confirmPhrase.value.trim(),
-      ...(isWebDeployment ? { verificationToken: pendingSiteChallenge?.token } : {}),
-    }, !isWebDeployment);
-    renderLocalAudit(audit);
-    pendingSiteChallenge = null;
-  } catch (error) {
-    localAuditResults.replaceChildren();
-    addText(localAuditResults, "p", "audit-error", error.message);
-  } finally {
-    localAuditReviewButton.disabled = false;
-    localAuditReviewButton.textContent = isWebDeployment ? "Review permission & continue" : "Review safety & continue";
-  }
-}
-
 function updateProviderLabels() {
   const groq = providerSelect.value === "groq";
   apiKeyLabel.textContent = groq ? "GroqCloud API key" : "Google AI Studio API key";
@@ -1056,23 +835,9 @@ Promise.all([
 ])
   .then(([health, desktopStatus]) => {
     isWebDeployment = Boolean(health.webDeployment && !window.patchPilot);
-    localAuditPanel.hidden = isWebDeployment
-      ? !health.siteAuditAvailable
-      : !health.localAuditAvailable;
     if (isWebDeployment) {
       settingsCopy.textContent = "Choose your provider and enter your own API key. It is held in this tab's memory and sent over HTTPS to PatchPilot, then to the provider for your requests. PatchPilot does not save it; reloading or closing the tab clears it.";
       privacyNote.textContent = "Files are sent to the selected AI provider · Not saved by PatchPilot";
-      localAuditUrl.placeholder = "https://example.com";
-      localAuditUrlLabel.textContent = "Public HTTPS website URL";
-      localAuditPanel.querySelector(".workspace-head .file-limit").textContent = "PUBLIC HTTPS · PASSIVE GET ONLY";
-      siteAuditCopy.textContent = "Check a public HTTPS website that you own or have permission to assess. PatchPilot checks basic response security headers and cookie settings, follows same-origin links only, and never submits forms or sends exploit payloads. Hosted mode cannot reach localhost or private networks.";
-      localAuditReviewButton.textContent = "Prepare ownership verification";
-      confirmBadge.textContent = "PUBLIC WEBSITE SAFETY CHECK";
-      document.querySelector("#local-audit-confirm-title").textContent = "Confirm permission to check this website";
-      confirmWarning.textContent = "It will not submit forms, try passwords, or send attack/injection payloads. Redirects and links outside this exact origin are not followed. Requests are limited to public HTTPS websites and may still have side effects on poorly designed sites.";
-      confirmOwnershipLabel.lastChild.textContent = " I own this website or have permission to check it.";
-      confirmPassiveLabel.lastChild.textContent = " I understand this is a passive, GET-only check with no payloads or form submissions.";
-      confirmLocalAuditButton.textContent = "Start passive check";
     }
     const settings = desktopStatus || health;
     setKeyStatus(settings.configured, settings.provider);

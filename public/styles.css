@@ -250,76 +250,7 @@ h1 { text-wrap: balance; }
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
 
-.local-audit-panel {
-  margin-top: 18px;
-  padding: 23px;
-  border: 1px solid #343943;
-  border-radius: 12px;
-  background: linear-gradient(145deg, #b5f26908, transparent 45%), var(--panel);
-  box-shadow: 0 18px 60px #0000001f;
-}
-.local-audit-panel .workspace-head { margin-bottom: 10px; }
-.local-audit-panel .settings-copy { max-width: 620px; }
-.local-audit-form { margin-top: 16px; }
-.local-audit-row { display: flex; gap: 9px; }
-.local-audit-row input, .confirm-phrase {
-  flex: 1;
-  min-width: 0;
-  min-height: 39px;
-  padding: 0 11px;
-  border: 1px solid #414650;
-  border-radius: 6px;
-  color: var(--text);
-  background: #101216;
-  font: 12px var(--mono);
-}
-.local-audit-row input:focus, .confirm-phrase:focus { outline: none; border-color: var(--accent); }
-.local-audit-results:empty { display: none; }
-.audit-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
-  margin-top: 17px;
-  padding: 13px;
-  border: 1px solid #343943;
-  border-radius: 6px;
-  background: #14171c;
-}
-.audit-summary strong { color: var(--accent); font: 600 13px var(--mono); }
-.audit-summary span, .audit-scope, .audit-note { color: var(--muted); font-size: 10px; line-height: 1.6; }
-.audit-scope { margin: 8px 2px 0; }
-.audit-page { margin-top: 11px; padding: 13px; border: 1px solid #30343d; border-radius: 7px; background: #191c22; }
-.audit-page-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: #d7d9de; font-size: 11px; }
-.audit-page-status { color: var(--muted); font: 10px var(--mono); }
 .audit-note { margin: 10px 0 0; }
-.audit-finding { display: flex; align-items: flex-start; gap: 10px; margin-top: 9px; padding: 10px; border: 1px solid #30343d; border-radius: 5px; }
-.audit-finding > div { min-width: 0; color: #d7d9de; font-size: 11px; }
-.audit-finding .finding-copy, .audit-finding .finding-recommendation { margin: 5px 0 0; }
-.audit-error { margin: 13px 0 0; color: #ffaaaa; font-size: 11px; line-height: 1.6; }
-.audit-copy-row { display: flex; align-items: center; gap: 10px; margin-top: 9px; padding: 10px; border: 1px solid #30343d; border-radius: 5px; background: #191c22; }
-.audit-copy-row strong { flex: 0 0 105px; color: #d7d9de; font-size: 11px; }
-.audit-copy-row code { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--accent); font: 10px var(--mono); }
-.audit-copy-row .button { min-height: 28px; padding: 0 9px; font-size: 10px; }
-#verify-site-ownership { margin-top: 11px; }
-.confirm-dialog {
-  width: min(540px, calc(100% - 30px));
-  max-height: min(90vh, 760px);
-  padding: 24px;
-  border: 1px solid #454b56;
-  border-radius: 12px;
-  color: var(--text);
-  background: #171a20;
-  box-shadow: 0 24px 100px #000b;
-}
-.confirm-dialog::backdrop { background: #07090dcc; backdrop-filter: blur(4px); }
-.confirm-dialog h2 { margin-top: 12px; font-size: 18px; }
-.confirm-dialog p { color: #a6abb5; font-size: 12px; line-height: 1.65; }
-.confirm-dialog .confirm-warning { padding: 10px; border: 1px solid #8d672c55; border-radius: 5px; color: #ffd28c; background: #d99e3712; }
-.confirm-check { display: flex; align-items: flex-start; gap: 9px; margin: 13px 0; color: #d7d9de; font-size: 11px; line-height: 1.5; }
-.confirm-check input { margin: 2px 0 0; accent-color: var(--accent); }
-.confirm-phrase { width: 100%; margin-top: 7px; }
-.confirm-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
 .logic-map-section {
   margin-top: 13px;
   padding: 15px;
@@ -380,13 +311,6 @@ h1 { text-wrap: balance; }
 }
 
 @media (max-width: 600px) {
-  .local-audit-panel { padding: 17px; }
-  .local-audit-row { flex-direction: column; }
-  .local-audit-row .button { min-height: 38px; }
-  .confirm-dialog { padding: 19px; }
-  .audit-finding { flex-direction: column; }
-  .audit-copy-row { align-items: flex-start; flex-wrap: wrap; }
-  .audit-copy-row strong { flex-basis: 100%; }
   .logic-map-section { padding: 11px; }
   .logic-map-heading { align-items: flex-start; flex-direction: column; }
   .logic-map-actions { width: 100%; flex-wrap: wrap; }

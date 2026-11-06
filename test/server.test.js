@@ -6,13 +6,6 @@ const {
   localSyntaxFindings,
   buildLogicMap,
   logicChartToMermaid,
-  validateLocalAuditUrl,
-  validatePublicAuditUrl,
-  verifyPublicSiteOwnership,
-  getPublicAuditDnsRecordName,
-  isPublicIPv4,
-  auditLocalSite,
-  auditPublicSite,
   extractModelJson,
   extractInteractionText,
   extractGroqText,
@@ -124,246 +117,6 @@ test("builds best-effort flowcharts for common non-JavaScript languages", () => 
   assert.equal(dataMap.language, "YAML");
   assert.equal(dataMap.mode, "heuristic");
   assert.throws(() => buildLogicMap({ name: "notes.txt", content: `${"statement\n".repeat(160)}` }), /too many visible statements/);
-});
-
-test("restricts local website audit URLs to exact loopback hosts", () => {
-  assert.equal(validateLocalAuditUrl("http://localhost:3000/app#top").href, "http://localhost:3000/app");
-  assert.equal(validateLocalAuditUrl("http://127.0.0.1:8080/").hostname, "127.0.0.1");
-  assert.equal(validateLocalAuditUrl("http://[::1]:8080/").hostname, "[::1]");
-  for (const value of [
-    "https://example.com/",
-    "http://127.0.0.2/",
-    "http://localhost.evil.test/",
-    "file:///etc/passwd",
-    "http://user:pass@localhost/",
-    "http://localhost./",
-  ]) {
-    assert.throws(() => validateLocalAuditUrl(value), /Only http/);
-  }
-});
-
-test("restricts public website checks to HTTPS hosts resolving to public IPv4", async () => {
-  const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
-  const url = await validatePublicAuditUrl("https://example.com/path?token=removed#section", publicLookup);
-  assert.equal(url.href, "https://example.com/path");
-  assert.equal(isPublicIPv4("93.184.216.34"), true);
-  for (const address of [
-    "10.0.0.1",
-    "127.0.0.1",
-    "169.254.169.254",
-    "192.168.1.1",
-    "172.20.0.1",
-    "100.64.0.1",
-    "198.18.0.1",
-    "224.0.0.1",
-  ]) {
-    assert.equal(isPublicIPv4(address), false, `${address} must not be public`);
-  }
-  for (const value of [
-    "http://example.com/",
-    "https://127.0.0.1/",
-    "https://localhost/",
-    "https://example.com:8443/",
-    "https://user:pass@example.com/",
-    "https://example.local/",
-  ]) {
-    await assert.rejects(validatePublicAuditUrl(value, publicLookup), /Only public HTTPS/);
-  }
-  await assert.rejects(
-    validatePublicAuditUrl("https://example.com/", async () => [{ address: "10.0.0.5", family: 4 }]),
-    /public IPv4 address/,
-  );
-  await assert.rejects(
-    validatePublicAuditUrl("https://example.com/", async () => [{ address: "2606:4700:4700::1111", family: 6 }]),
-    /public IPv4 address/,
-  );
-});
-
-test("requires a matching DNS TXT token to verify public website ownership", async () => {
-  const token = "a".repeat(48);
-  const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
-  const recordName = "_patchpilot-verification.example.com";
-  assert.equal(getPublicAuditDnsRecordName(new URL("https://example.com/")), recordName);
-  const verified = await verifyPublicSiteOwnership("https://example.com/", token, {
-    lookup,
-    resolveTxt: async (name) => {
-      assert.equal(name, recordName);
-      return [[`patchpilot-verification=${token}`]];
-    },
-  });
-  assert.equal(verified.url.hostname, "example.com");
-  assert.equal(verified.recordName, recordName);
-  await assert.rejects(verifyPublicSiteOwnership("https://example.com/", "not-a-token", { lookup }), /Generate a website verification token/);
-  await assert.rejects(verifyPublicSiteOwnership("https://example.com/", token, {
-    lookup,
-    resolveTxt: async () => [["patchpilot-verification=wrong-token"]],
-  }), /required TXT value was not found/);
-});
-
-test("crawls a bounded same-origin localhost site using GET only", async (t) => {
-  const requests = [];
-  const site = require("node:http").createServer((request, response) => {
-    requests.push({ method: request.method, url: request.url });
-    response.setHeader("Content-Type", "text/html; charset=utf-8");
-    response.setHeader("Set-Cookie", "session=secret");
-    if (request.url === "/") {
-      response.end('<title>Local Test</title><a href="/child">Child</a><a href="https://example.com/out">External</a><form method="post" action="/submit"><input name="x"></form>');
-    } else {
-      response.end("<title>Child page</title><p>Local page</p>");
-    }
-  });
-  await new Promise((resolve) => site.listen(0, "127.0.0.1", resolve));
-  t.after(() => site.close());
-  const result = await auditLocalSite(`http://127.0.0.1:${site.address().port}/`);
-  assert.equal(result.pageCount, 2);
-  assert.equal(result.pages[0].title, "Local Test");
-  assert.equal(result.pages[1].title, "Child page");
-  assert.equal(requests.length, 2);
-  assert.ok(requests.every((request) => request.method === "GET"));
-  assert.ok(requests.every((request) => request.url === "/" || request.url === "/child"));
-  assert.ok(result.findings.some((finding) => finding.title.includes("HttpOnly")));
-  assert.match(result.scope, /No exploit or injection payloads/);
-
-  const localhostResult = await auditLocalSite(`http://localhost:${site.address().port}/`);
-  assert.equal(localhostResult.pageCount, 2);
-  assert.equal(requests.length, 4);
-});
-
-test("crawls an authorized public HTTPS site passively and stays same-origin", async () => {
-  const requests = [];
-  const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
-  const requestPage = async (url) => {
-    requests.push(url.href);
-    if (url.pathname === "/") {
-      return {
-        status: 200,
-        headers: { "content-type": "text/html", "set-cookie": ["session=demo"] },
-        body: '<title>Demo site</title><a href="/about">About</a><a href="https://other.example/path">External</a>',
-      };
-    }
-    return {
-      status: 200,
-      headers: { "content-type": "text/html", "content-security-policy": "default-src 'self'" },
-      body: "<title>About</title>",
-    };
-  };
-  const result = await auditPublicSite("https://example.com/", { lookup, requestPage });
-  assert.equal(result.pageCount, 2);
-  assert.deepEqual(requests, ["https://example.com/", "https://example.com/about"]);
-  assert.equal(result.pages[0].title, "Demo site");
-  assert.equal(result.pages[1].title, "About");
-  assert.match(result.scope, /public HTTPS pages only/);
-  assert.ok(result.findings.some((finding) => finding.title.includes("HttpOnly")));
-});
-
-test("local website audit endpoint requires both explicit confirmations", async (t) => {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const response = await fetch(`${base}/api/local-audit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: "http://127.0.0.1:1", confirmLocalOwnership: true }),
-  });
-  assert.equal(response.status, 400);
-  assert.match((await response.json()).error, /Confirm local ownership/);
-});
-
-test("hosted site audit requires JSON, permission, and passive-scan confirmations", async (t) => {
-  let publishedTxtRecords = [];
-  const publicDnsLookup = async () => [{ address: "93.184.216.34", family: 4 }];
-  const server = createServer({
-    webDeployment: true,
-    publicDnsLookup,
-    publicDnsResolveTxt: async () => publishedTxtRecords,
-    publicPageRequest: async () => ({
-      status: 200,
-      headers: { "content-type": "text/html", "content-security-policy": "default-src 'self'" },
-      body: "<title>Authorized site</title>",
-    }),
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const health = await (await fetch(`${base}/api/health`)).json();
-  assert.equal(health.siteAuditAvailable, true);
-  assert.equal(health.localAuditAvailable, false);
-
-  const missingConfirmations = await fetch(`${base}/api/site-audit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: "https://example.com/" }),
-  });
-  assert.equal(missingConfirmations.status, 400);
-  assert.match((await missingConfirmations.json()).error, /Confirm that you own/);
-
-  const missingOwnershipProof = await fetch(`${base}/api/site-audit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      url: "https://example.com/",
-      confirmLocalOwnership: true,
-      confirmNoPayloads: true,
-      confirmationText: "I OWN THIS SITE",
-      verificationToken: "a".repeat(48),
-    }),
-  });
-  assert.equal(missingOwnershipProof.status, 400);
-  assert.match((await missingOwnershipProof.json()).error, /required TXT value was not found/);
-
-  const challengeResponse = await fetch(`${base}/api/site-audit/challenge`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: "https://example.com/" }),
-  });
-  assert.equal(challengeResponse.status, 200);
-  const challenge = await challengeResponse.json();
-  assert.equal(challenge.recordName, "_patchpilot-verification.example.com");
-  assert.match(challenge.recordValue, /^patchpilot-verification=[a-f0-9]{48}$/);
-
-  const verifyBeforeDns = await fetch(`${base}/api/site-audit/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: "https://example.com/", token: challenge.token }),
-  });
-  assert.equal(verifyBeforeDns.status, 400);
-
-  publishedTxtRecords = [[challenge.recordValue]];
-  const verifyAfterDns = await fetch(`${base}/api/site-audit/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: "https://example.com/", token: challenge.token }),
-  });
-  assert.deepEqual(await verifyAfterDns.json(), { verified: true, hostname: "example.com" });
-
-  const authorizedAudit = await fetch(`${base}/api/site-audit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      url: "https://example.com/",
-      confirmLocalOwnership: true,
-      confirmNoPayloads: true,
-      confirmationText: "I OWN THIS SITE",
-      verificationToken: challenge.token,
-    }),
-  });
-  assert.equal(authorizedAudit.status, 200);
-  assert.equal((await authorizedAudit.json()).pages[0].title, "Authorized site");
-
-  const localTarget = await fetch(`${base}/api/site-audit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      url: "https://127.0.0.1/",
-      confirmLocalOwnership: true,
-      confirmNoPayloads: true,
-      confirmationText: "I OWN THIS SITE",
-      verificationToken: "a".repeat(48),
-    }),
-  });
-  assert.equal(localTarget.status, 400);
-  assert.match((await localTarget.json()).error, /Only public HTTPS/);
 });
 
 test("serves generated JavaScript logic maps", async (t) => {
@@ -479,8 +232,6 @@ test("serves the local UI and reports Gemini configuration without leaking the k
     provider: "gemini",
     model: "gemini-3.8-flash",
     webDeployment: false,
-    localAuditAvailable: true,
-    siteAuditAvailable: true,
   });
   const home = await fetch(base);
   assert.equal(home.status, 200);
@@ -488,7 +239,7 @@ test("serves the local UI and reports Gemini configuration without leaking the k
   assert.match(await home.text(), /Review every suggested change/);
 });
 
-test("supports transient visitor keys in hosted mode and disables localhost auditing", async (t) => {
+test("supports transient visitor keys in hosted mode", async (t) => {
   const originalFetch = global.fetch;
   const server = createServer({ webDeployment: true });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -501,7 +252,6 @@ test("supports transient visitor keys in hosted mode and disables localhost audi
   const noKeyHealth = await noKeyResponse.json();
   assert.equal(noKeyHealth.configured, false);
   assert.equal(noKeyHealth.webDeployment, true);
-  assert.equal(noKeyHealth.localAuditAvailable, false);
 
   const visitorKey = "visitor-groq-test-key";
   const healthResponse = await originalFetch(`${base}/api/health`, {
@@ -537,11 +287,8 @@ test("supports transient visitor keys in hosted mode and disables localhost audi
     .filter((block) => block.startsWith("data: "))
     .map((block) => JSON.parse(block.slice(6)));
   assert.equal(scanEvents.at(-1).type, "complete");
-  assert.equal(upstreamKey, `Bearer ${visitorKey}`);
+  assert.equal(upstreamKey, "Bearer visitor-groq-test-key");
 
-  const auditResponse = await originalFetch(`${base}/api/local-audit`, { method: "POST" });
-  assert.equal(auditResponse.status, 403);
-  assert.match((await auditResponse.json()).error, /hosted server cannot access/);
 });
 
 test("reports unconfigured Gemini instead of returning fake scan results", async (t) => {
@@ -729,8 +476,6 @@ test("uses Groq's OpenAI-compatible API with the selected provider key", async (
     provider: "groq",
     model: "openai/gpt-oss-20b",
     webDeployment: false,
-    localAuditAvailable: true,
-    siteAuditAvailable: true,
   });
   const response = await originalFetch(`${base}/api/scan`, {
     method: "POST",
