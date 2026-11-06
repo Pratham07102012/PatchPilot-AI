@@ -1,5 +1,6 @@
 const http = require("node:http");
 const https = require("node:https");
+const crypto = require("node:crypto");
 const dns = require("node:dns");
 const net = require("node:net");
 const fs = require("node:fs");
@@ -656,6 +657,35 @@ async function validatePublicAuditUrl(value, lookup = dns.promises.lookup) {
   return url;
 }
 
+function getPublicAuditDnsRecordName(url) {
+  return `_patchpilot-verification.${url.hostname.toLowerCase().replace(/\.$/, "")}`;
+}
+
+async function verifyPublicSiteOwnership(value, token, {
+  lookup = dns.promises.lookup,
+  resolveTxt = dns.promises.resolveTxt,
+} = {}) {
+  if (typeof token !== "string" || !/^[a-f0-9]{48}$/i.test(token)) {
+    throw Object.assign(new Error("Generate a website verification token before checking ownership."), { status: 400 });
+  }
+  const url = await validatePublicAuditUrl(value, lookup);
+  const recordName = getPublicAuditDnsRecordName(url);
+  let records;
+  try {
+    records = await resolveTxt(recordName);
+  } catch (error) {
+    if (["ENODATA", "ENOTFOUND", "ESERVFAIL", "ETIMEOUT"].includes(error.code)) {
+      throw Object.assign(new Error(`DNS TXT record not found at ${recordName}. Add the record and allow time for DNS propagation.`), { status: 400 });
+    }
+    throw error;
+  }
+  const expectedValue = `patchpilot-verification=${token.toLowerCase()}`;
+  if (!records.some((record) => record.join("") === expectedValue)) {
+    throw Object.assign(new Error(`The required TXT value was not found at ${recordName}. Check the record and allow time for DNS propagation.`), { status: 400 });
+  }
+  return { url, recordName };
+}
+
 function isLocalAddress(address) {
   const normalized = address.toLowerCase();
   if (net.isIPv4(normalized)) return normalized === "127.0.0.1";
@@ -892,7 +922,7 @@ async function auditPublicSite(value, { lookup, requestPage = requestPublicPage 
     pageLimit: MAX_PUBLIC_AUDIT_PAGES,
     depthLimit: MAX_PUBLIC_AUDIT_DEPTH,
     durationMs: MAX_PUBLIC_AUDIT_DURATION_MS,
-    scope: "Same-origin public HTTPS pages only. Public IPv4 destinations are validated and pinned per request. GET requests only; redirects and forms are not submitted. No exploit or injection payloads are sent.",
+    scope: "Same-origin public HTTPS pages only. DNS TXT ownership proof is required for each crawl; remove the TXT record afterward to revoke it. Public IPv4 destinations are validated and pinned per request. GET requests only; redirects and forms are not submitted. No exploit or injection payloads are sent.",
   });
 }
 
@@ -1195,7 +1225,12 @@ function serveStatic(request, response) {
   });
 }
 
-function createServer({ webDeployment = DEFAULT_WEB_DEPLOYMENT } = {}) {
+function createServer({
+  webDeployment = DEFAULT_WEB_DEPLOYMENT,
+  publicDnsLookup = dns.promises.lookup,
+  publicDnsResolveTxt = dns.promises.resolveTxt,
+  publicPageRequest = requestPublicPage,
+} = {}) {
   return http.createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/api/health") {
       try {
@@ -1261,10 +1296,62 @@ function createServer({ webDeployment = DEFAULT_WEB_DEPLOYMENT } = {}) {
         ) {
           throw Object.assign(new Error("Confirm that you own or are authorized to check this site, acknowledge the passive GET-only scope, and type I OWN THIS SITE."), { status: 400 });
         }
-        jsonResponse(response, 200, await auditPublicSite(payload.url));
+        await verifyPublicSiteOwnership(payload.url, payload.verificationToken, {
+          lookup: publicDnsLookup,
+          resolveTxt: publicDnsResolveTxt,
+        });
+        jsonResponse(response, 200, await auditPublicSite(payload.url, {
+          lookup: publicDnsLookup,
+          requestPage: publicPageRequest,
+        }));
       } catch (error) {
         if (!response.headersSent && !response.destroyed) {
           jsonResponse(response, error.status || 502, { error: error.message || "Public website check failed." });
+        }
+      }
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/site-audit/challenge") {
+      try {
+        if (!webDeployment) {
+          throw Object.assign(new Error("DNS ownership verification is only required for the hosted website check."), { status: 404 });
+        }
+        if (!/^application\/json(?:\s*;|$)/i.test(request.headers["content-type"] || "")) {
+          throw Object.assign(new Error("Website check requests must use application/json."), { status: 415 });
+        }
+        const payload = await readJson(request);
+        const url = await validatePublicAuditUrl(payload?.url, publicDnsLookup);
+        const token = crypto.randomBytes(24).toString("hex");
+        jsonResponse(response, 200, {
+          hostname: url.hostname,
+          recordName: getPublicAuditDnsRecordName(url),
+          recordValue: `patchpilot-verification=${token}`,
+          token,
+        });
+      } catch (error) {
+        if (!response.headersSent && !response.destroyed) {
+          jsonResponse(response, error.status || 502, { error: error.message || "Could not prepare website ownership verification." });
+        }
+      }
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/site-audit/verify") {
+      try {
+        if (!webDeployment) {
+          throw Object.assign(new Error("DNS ownership verification is only required for the hosted website check."), { status: 404 });
+        }
+        if (!/^application\/json(?:\s*;|$)/i.test(request.headers["content-type"] || "")) {
+          throw Object.assign(new Error("Website check requests must use application/json."), { status: 415 });
+        }
+        const payload = await readJson(request);
+        const verification = await verifyPublicSiteOwnership(payload?.url, payload?.token, {
+          lookup: publicDnsLookup,
+          resolveTxt: publicDnsResolveTxt,
+        });
+        jsonResponse(response, 200, { verified: true, hostname: verification.url.hostname });
+      } catch (error) {
+        if (!response.headersSent && !response.destroyed) {
+          jsonResponse(response, error.status || 502, { error: error.message || "Could not verify website ownership." });
         }
       }
       return;
@@ -1389,6 +1476,8 @@ module.exports = {
   logicChartToMermaid,
   validateLocalAuditUrl,
   validatePublicAuditUrl,
+  verifyPublicSiteOwnership,
+  getPublicAuditDnsRecordName,
   isPublicIPv4,
   auditLocalSite,
   auditPublicSite,

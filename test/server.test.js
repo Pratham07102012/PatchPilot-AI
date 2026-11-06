@@ -8,6 +8,8 @@ const {
   logicChartToMermaid,
   validateLocalAuditUrl,
   validatePublicAuditUrl,
+  verifyPublicSiteOwnership,
+  getPublicAuditDnsRecordName,
   isPublicIPv4,
   auditLocalSite,
   auditPublicSite,
@@ -177,6 +179,27 @@ test("restricts public website checks to HTTPS hosts resolving to public IPv4", 
   );
 });
 
+test("requires a matching DNS TXT token to verify public website ownership", async () => {
+  const token = "a".repeat(48);
+  const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
+  const recordName = "_patchpilot-verification.example.com";
+  assert.equal(getPublicAuditDnsRecordName(new URL("https://example.com/")), recordName);
+  const verified = await verifyPublicSiteOwnership("https://example.com/", token, {
+    lookup,
+    resolveTxt: async (name) => {
+      assert.equal(name, recordName);
+      return [[`patchpilot-verification=${token}`]];
+    },
+  });
+  assert.equal(verified.url.hostname, "example.com");
+  assert.equal(verified.recordName, recordName);
+  await assert.rejects(verifyPublicSiteOwnership("https://example.com/", "not-a-token", { lookup }), /Generate a website verification token/);
+  await assert.rejects(verifyPublicSiteOwnership("https://example.com/", token, {
+    lookup,
+    resolveTxt: async () => [["patchpilot-verification=wrong-token"]],
+  }), /required TXT value was not found/);
+});
+
 test("crawls a bounded same-origin localhost site using GET only", async (t) => {
   const requests = [];
   const site = require("node:http").createServer((request, response) => {
@@ -248,7 +271,18 @@ test("local website audit endpoint requires both explicit confirmations", async 
 });
 
 test("hosted site audit requires JSON, permission, and passive-scan confirmations", async (t) => {
-  const server = createServer({ webDeployment: true });
+  let publishedTxtRecords = [];
+  const publicDnsLookup = async () => [{ address: "93.184.216.34", family: 4 }];
+  const server = createServer({
+    webDeployment: true,
+    publicDnsLookup,
+    publicDnsResolveTxt: async () => publishedTxtRecords,
+    publicPageRequest: async () => ({
+      status: 200,
+      headers: { "content-type": "text/html", "content-security-policy": "default-src 'self'" },
+      body: "<title>Authorized site</title>",
+    }),
+  });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -264,6 +298,59 @@ test("hosted site audit requires JSON, permission, and passive-scan confirmation
   assert.equal(missingConfirmations.status, 400);
   assert.match((await missingConfirmations.json()).error, /Confirm that you own/);
 
+  const missingOwnershipProof = await fetch(`${base}/api/site-audit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: "https://example.com/",
+      confirmLocalOwnership: true,
+      confirmNoPayloads: true,
+      confirmationText: "I OWN THIS SITE",
+      verificationToken: "a".repeat(48),
+    }),
+  });
+  assert.equal(missingOwnershipProof.status, 400);
+  assert.match((await missingOwnershipProof.json()).error, /required TXT value was not found/);
+
+  const challengeResponse = await fetch(`${base}/api/site-audit/challenge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: "https://example.com/" }),
+  });
+  assert.equal(challengeResponse.status, 200);
+  const challenge = await challengeResponse.json();
+  assert.equal(challenge.recordName, "_patchpilot-verification.example.com");
+  assert.match(challenge.recordValue, /^patchpilot-verification=[a-f0-9]{48}$/);
+
+  const verifyBeforeDns = await fetch(`${base}/api/site-audit/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: "https://example.com/", token: challenge.token }),
+  });
+  assert.equal(verifyBeforeDns.status, 400);
+
+  publishedTxtRecords = [[challenge.recordValue]];
+  const verifyAfterDns = await fetch(`${base}/api/site-audit/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: "https://example.com/", token: challenge.token }),
+  });
+  assert.deepEqual(await verifyAfterDns.json(), { verified: true, hostname: "example.com" });
+
+  const authorizedAudit = await fetch(`${base}/api/site-audit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: "https://example.com/",
+      confirmLocalOwnership: true,
+      confirmNoPayloads: true,
+      confirmationText: "I OWN THIS SITE",
+      verificationToken: challenge.token,
+    }),
+  });
+  assert.equal(authorizedAudit.status, 200);
+  assert.equal((await authorizedAudit.json()).pages[0].title, "Authorized site");
+
   const localTarget = await fetch(`${base}/api/site-audit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -272,6 +359,7 @@ test("hosted site audit requires JSON, permission, and passive-scan confirmation
       confirmLocalOwnership: true,
       confirmNoPayloads: true,
       confirmationText: "I OWN THIS SITE",
+      verificationToken: "a".repeat(48),
     }),
   });
   assert.equal(localTarget.status, 400);

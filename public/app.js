@@ -63,6 +63,7 @@ let activeLogicMap = null;
 let isWebDeployment = false;
 let sessionApiKey = "";
 let sessionProvider = "gemini";
+let pendingSiteChallenge = null;
 
 function showNotice(message, isError = false) {
   notice.textContent = message;
@@ -867,6 +868,14 @@ localAuditForm.addEventListener("submit", (event) => {
   event.preventDefault();
   if (!localAuditForm.reportValidity()) return;
   pendingLocalAuditUrl = localAuditUrl.value.trim();
+  if (isWebDeployment) {
+    prepareSiteOwnershipChallenge();
+    return;
+  }
+  openAuditConfirmation();
+});
+
+function openAuditConfirmation() {
   confirmTarget.textContent = pendingLocalAuditUrl;
   const phrase = isWebDeployment ? "I OWN THIS SITE" : "LOCALHOST ONLY";
   confirmSummary.replaceChildren(
@@ -890,7 +899,81 @@ localAuditForm.addEventListener("submit", (event) => {
   );
   confirmLocalAuditButton.disabled = true;
   localAuditDialog.showModal();
-});
+}
+
+function addCopyRow(parent, label, value) {
+  const row = document.createElement("div");
+  row.className = "audit-copy-row";
+  addText(row, "strong", "", label);
+  const code = document.createElement("code");
+  code.textContent = value;
+  row.append(code);
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "button button-secondary";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      copy.textContent = "Copied";
+    } catch (error) {
+      addText(parent, "p", "audit-error", `Could not copy to clipboard: ${error.message}`);
+    }
+  });
+  row.append(copy);
+  parent.append(row);
+}
+
+async function prepareSiteOwnershipChallenge() {
+  localAuditReviewButton.disabled = true;
+  localAuditReviewButton.textContent = "Preparing verification…";
+  localAuditResults.replaceChildren();
+  try {
+    pendingSiteChallenge = {
+      ...(await post("/api/site-audit/challenge", { url: pendingLocalAuditUrl }, false)),
+      url: pendingLocalAuditUrl,
+    };
+    addText(localAuditResults, "p", "audit-note", "To verify that you control this domain, add the following temporary DNS TXT record. DNS changes may take a few minutes to appear.");
+    addCopyRow(localAuditResults, "Record name", pendingSiteChallenge.recordName);
+    addCopyRow(localAuditResults, "TXT value", pendingSiteChallenge.recordValue);
+    addText(localAuditResults, "p", "audit-note", "After the check finishes, remove this TXT record to revoke the verification proof.");
+    const verifyButton = document.createElement("button");
+    verifyButton.type = "button";
+    verifyButton.className = "button button-primary";
+    verifyButton.id = "verify-site-ownership";
+    verifyButton.textContent = "Verify DNS ownership";
+    verifyButton.addEventListener("click", verifySiteOwnership);
+    localAuditResults.append(verifyButton);
+  } catch (error) {
+    pendingSiteChallenge = null;
+    addText(localAuditResults, "p", "audit-error", error.message);
+  } finally {
+    localAuditReviewButton.disabled = false;
+    localAuditReviewButton.textContent = "Prepare ownership verification";
+  }
+}
+
+async function verifySiteOwnership() {
+  if (!pendingSiteChallenge || pendingSiteChallenge.url !== pendingLocalAuditUrl) {
+    showNotice("Prepare a new DNS verification record for this website URL.", true);
+    return;
+  }
+  const verifyButton = document.querySelector("#verify-site-ownership");
+  verifyButton.disabled = true;
+  verifyButton.textContent = "Verifying DNS…";
+  try {
+    await post("/api/site-audit/verify", {
+      url: pendingLocalAuditUrl,
+      token: pendingSiteChallenge.token,
+    }, false);
+    showNotice("Domain ownership verified. Confirm the passive check to continue.");
+    openAuditConfirmation();
+  } catch (error) {
+    addText(localAuditResults, "p", "audit-error", error.message);
+    verifyButton.disabled = false;
+    verifyButton.textContent = "Verify DNS ownership";
+  }
+}
 for (const element of [confirmOwnership, confirmPassive, confirmPhrase]) {
   element.addEventListener("input", updateLocalAuditConfirmation);
   element.addEventListener("change", updateLocalAuditConfirmation);
@@ -926,8 +1009,10 @@ async function runLocalAudit() {
       confirmLocalOwnership: confirmOwnership.checked,
       confirmNoPayloads: confirmPassive.checked,
       confirmationText: confirmPhrase.value.trim(),
+      ...(isWebDeployment ? { verificationToken: pendingSiteChallenge?.token } : {}),
     }, !isWebDeployment);
     renderLocalAudit(audit);
+    pendingSiteChallenge = null;
   } catch (error) {
     localAuditResults.replaceChildren();
     addText(localAuditResults, "p", "audit-error", error.message);
@@ -981,7 +1066,7 @@ Promise.all([
       localAuditUrlLabel.textContent = "Public HTTPS website URL";
       localAuditPanel.querySelector(".workspace-head .file-limit").textContent = "PUBLIC HTTPS · PASSIVE GET ONLY";
       siteAuditCopy.textContent = "Check a public HTTPS website that you own or have permission to assess. PatchPilot checks basic response security headers and cookie settings, follows same-origin links only, and never submits forms or sends exploit payloads. Hosted mode cannot reach localhost or private networks.";
-      localAuditReviewButton.textContent = "Review permission & continue";
+      localAuditReviewButton.textContent = "Prepare ownership verification";
       confirmBadge.textContent = "PUBLIC WEBSITE SAFETY CHECK";
       document.querySelector("#local-audit-confirm-title").textContent = "Confirm permission to check this website";
       confirmWarning.textContent = "It will not submit forms, try passwords, or send attack/injection payloads. Redirects and links outside this exact origin are not followed. Requests are limited to public HTTPS websites and may still have side effects on poorly designed sites.";
