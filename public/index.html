@@ -83,12 +83,12 @@
 
       <section class="local-audit-panel" aria-labelledby="local-audit-title">
         <div class="workspace-head">
-          <div><span class="step">WEB</span><h2 id="local-audit-title">Local website check</h2></div>
+          <div><span class="step">WEB</span><h2 id="local-audit-title">Website check</h2></div>
           <span class="file-limit">LOOPBACK ONLY · READ-ONLY</span>
         </div>
-        <p class="settings-copy">Crawl a localhost site for basic security headers and cookie settings. This is a passive check: it uses bounded GET requests, follows same-origin links only, and never submits forms or sends exploit payloads.</p>
+        <p id="site-audit-copy" class="settings-copy">Crawl a localhost site for basic security headers and cookie settings. This is a passive check: it uses bounded GET requests, follows same-origin links only, and never submits forms or sends exploit payloads.</p>
         <form id="local-audit-form" class="local-audit-form">
-          <label class="key-label" for="local-audit-url">Local website URL</label>
+          <label id="local-audit-url-label" class="key-label" for="local-audit-url">Local website URL</label>
           <div class="local-audit-row">
             <input id="local-audit-url" type="url" required placeholder="http://localhost:3000" autocomplete="url">
             <button id="local-audit-review" class="button button-secondary" type="submit">Review safety &amp; continue</button>
@@ -128,13 +128,13 @@
     </main>
     <dialog id="local-audit-confirm" class="confirm-dialog" aria-labelledby="local-audit-confirm-title">
       <form id="local-audit-confirm-form" method="dialog">
-        <span class="step">LOCAL-ONLY SAFETY CHECK</span>
+        <span id="confirm-badge" class="step">LOCAL-ONLY SAFETY CHECK</span>
         <h2 id="local-audit-confirm-title">Confirm this website is yours to test</h2>
-        <p>The audit will make up to 25 GET requests to <strong id="confirm-target"></strong>, at most two link levels deep. It reads response headers and HTML only.</p>
-        <p class="confirm-warning">It will not submit forms, try passwords, or send attack/injection payloads. Redirects and links outside this exact origin are not followed. Even GET requests can have side effects on poorly designed websites.</p>
-        <label class="confirm-check"><input id="confirm-ownership" type="checkbox"> I own this local website or have permission to test it.</label>
-        <label class="confirm-check"><input id="confirm-passive" type="checkbox"> I understand this is a passive, GET-only check with no payloads or form submissions.</label>
-        <label class="key-label" for="confirm-phrase">Type <strong>LOCALHOST ONLY</strong> to enable the audit</label>
+        <p id="confirm-summary">The audit will make up to 25 GET requests to <strong id="confirm-target"></strong>, at most two link levels deep. It reads response headers and HTML only.</p>
+        <p id="confirm-warning" class="confirm-warning">It will not submit forms, try passwords, or send attack/injection payloads. Redirects and links outside this exact origin are not followed. Even GET requests can have side effects on poorly designed websites.</p>
+        <label id="confirm-ownership-label" class="confirm-check"><input id="confirm-ownership" type="checkbox"> I own this local website or have permission to test it.</label>
+        <label id="confirm-passive-label" class="confirm-check"><input id="confirm-passive" type="checkbox"> I understand this is a passive, GET-only check with no payloads or form submissions.</label>
+        <label id="confirm-phrase-label" class="key-label" for="confirm-phrase">Type <strong>LOCALHOST ONLY</strong> to enable the audit</label>
         <input id="confirm-phrase" class="confirm-phrase" type="text" autocomplete="off" spellcheck="false">
         <div class="confirm-actions">
           <button id="cancel-local-audit" class="button button-secondary" type="button">Cancel</button>

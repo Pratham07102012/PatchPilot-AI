@@ -20,8 +20,12 @@ const MAX_CONCURRENT_GEMINI_REQUESTS = 3;
 const MAX_LOCAL_AUDIT_PAGES = 25;
 const MAX_LOCAL_AUDIT_DEPTH = 2;
 const MAX_LOCAL_AUDIT_DURATION_MS = 30_000;
+const MAX_PUBLIC_AUDIT_PAGES = 8;
+const MAX_PUBLIC_AUDIT_DEPTH = 2;
+const MAX_PUBLIC_AUDIT_DURATION_MS = 20_000;
 const LOCAL_AUDIT_TIMEOUT_MS = 5000;
 const LOCAL_AUDIT_MAX_RESPONSE_BYTES = 1024 * 1024;
+const PUBLIC_AUDIT_MAX_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_WEB_DEPLOYMENT = process.env.PATCHPILOT_WEB_DEPLOYMENT === "true";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -586,10 +590,122 @@ function validateLocalAuditUrl(value) {
   return url;
 }
 
+function ipv4ToInteger(address) {
+  return address.split(".").reduce((value, part) => ((value << 8) | Number(part)) >>> 0, 0);
+}
+
+function isPublicIPv4(address) {
+  if (net.isIP(address) !== 4) return false;
+  const blockedRanges = [
+    ["0.0.0.0", 8],
+    ["10.0.0.0", 8],
+    ["100.64.0.0", 10],
+    ["127.0.0.0", 8],
+    ["169.254.0.0", 16],
+    ["172.16.0.0", 12],
+    ["192.0.0.0", 24],
+    ["192.0.2.0", 24],
+    ["192.88.99.0", 24],
+    ["192.168.0.0", 16],
+    ["198.18.0.0", 15],
+    ["198.51.100.0", 24],
+    ["203.0.113.0", 24],
+    ["224.0.0.0", 4],
+    ["240.0.0.0", 4],
+  ];
+  const value = ipv4ToInteger(address);
+  return !blockedRanges.some(([network, prefix]) => {
+    const mask = (0xffffffff << (32 - prefix)) >>> 0;
+    return (value & mask) === (ipv4ToInteger(network) & mask);
+  });
+}
+
+async function resolvePublicIPv4(hostname, lookup = dns.promises.lookup) {
+  const addresses = await lookup(hostname, { all: true, verbatim: true });
+  const publicAddress = addresses.find(({ address, family }) => family === 4 && isPublicIPv4(address));
+  if (!publicAddress) {
+    throw Object.assign(new Error("The website host must resolve to a public IPv4 address; local, private, and IPv6-only hosts are not allowed."), { status: 400 });
+  }
+  return publicAddress.address;
+}
+
+async function validatePublicAuditUrl(value, lookup = dns.promises.lookup) {
+  if (typeof value !== "string" || value.length > 2048) {
+    throw Object.assign(new Error("Enter a public HTTPS website URL (maximum 2048 characters)."), { status: 400 });
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw Object.assign(new Error("Enter a valid public HTTPS website URL, such as https://example.com."), { status: 400 });
+  }
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+  const forbiddenSuffixes = [".localhost", ".local", ".internal", ".test", ".invalid", ".example"];
+  if (url.protocol !== "https:"
+    || url.port
+    || net.isIP(hostname)
+    || !hostname.includes(".")
+    || forbiddenSuffixes.some((suffix) => hostname.endsWith(suffix))
+    || url.username
+    || url.password) {
+    throw Object.assign(new Error("Only public HTTPS websites on the standard port are allowed; localhost, IP addresses, private hosts, and custom ports are blocked."), { status: 400 });
+  }
+  await resolvePublicIPv4(hostname, lookup);
+  url.hash = "";
+  url.search = "";
+  return url;
+}
+
 function isLocalAddress(address) {
   const normalized = address.toLowerCase();
   if (net.isIPv4(normalized)) return normalized === "127.0.0.1";
   return normalized === "::1" || normalized === "::ffff:127.0.0.1";
+}
+
+async function requestPublicPage(url, lookup = dns.promises.lookup) {
+  const address = await resolvePublicIPv4(url.hostname, lookup);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolve(result);
+    };
+    const request = https.request(url, {
+      method: "GET",
+      headers: {
+        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+        "User-Agent": "PatchPilot-Passive-Site-Check/1.0",
+      },
+      lookup(_hostname, options, callback) {
+        if (options && options.all) callback(null, [{ address, family: 4 }]);
+        else callback(null, address, 4);
+      },
+    }, (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > PUBLIC_AUDIT_MAX_RESPONSE_BYTES) {
+          request.destroy(new Error("Page response exceeded the 512 KB public website check limit."));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => finish(null, {
+        status: response.statusCode || 0,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString("utf8"),
+      }));
+      response.on("error", (error) => finish(error));
+    });
+    request.setTimeout(LOCAL_AUDIT_TIMEOUT_MS, () => {
+      request.destroy(new Error("The public website did not respond within 5 seconds."));
+    });
+    request.on("error", (error) => finish(error));
+    request.end();
+  });
 }
 
 function requestLocalPage(url) {
@@ -713,23 +829,22 @@ function localPageFindings(page) {
   return findings;
 }
 
-async function auditLocalSite(value) {
-  const startUrl = validateLocalAuditUrl(value);
+async function crawlSite(startUrl, requestPage, options) {
   const origin = startUrl.origin;
   const queue = [{ url: startUrl, depth: 0 }];
   const visited = new Set();
   const pages = [];
-  const deadline = Date.now() + MAX_LOCAL_AUDIT_DURATION_MS;
+  const deadline = Date.now() + options.durationMs;
   let stopReason = "";
-  while (queue.length && pages.length < MAX_LOCAL_AUDIT_PAGES) {
+  while (queue.length && pages.length < options.pageLimit) {
     if (Date.now() >= deadline) {
-      stopReason = "Stopped at the 30-second time limit.";
+      stopReason = `Stopped at the ${options.durationMs / 1000}-second time limit.`;
       break;
     }
     const next = queue.shift();
     if (visited.has(next.url.href)) continue;
     visited.add(next.url.href);
-    const response = await requestLocalPage(next.url);
+    const response = await requestPage(next.url);
     const contentType = String(response.headers["content-type"] || "").toLowerCase();
     const isHtml = contentType.includes("text/html") || contentType.includes("application/xhtml+xml");
     const title = isHtml ? response.body.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1].replace(/\s+/g, " ").trim().slice(0, 160) : "";
@@ -741,9 +856,9 @@ async function auditLocalSite(value) {
       redirectNotFollowed: response.status >= 300 && response.status < 400,
     };
     pages.push(page);
-    if (isHtml && next.depth < MAX_LOCAL_AUDIT_DEPTH && !page.redirectNotFollowed) {
+    if (isHtml && next.depth < options.depthLimit && !page.redirectNotFollowed) {
       for (const link of extractLocalLinks(response.body, next.url, origin)) {
-        if (queue.length + pages.length >= MAX_LOCAL_AUDIT_PAGES) break;
+        if (queue.length + pages.length >= options.pageLimit) break;
         if (!visited.has(link)) queue.push({ url: new URL(link), depth: next.depth + 1 });
       }
     }
@@ -752,13 +867,33 @@ async function auditLocalSite(value) {
   return {
     startUrl: startUrl.href,
     pageCount: pages.length,
-    pageLimit: MAX_LOCAL_AUDIT_PAGES,
+    pageLimit: options.pageLimit,
     pages,
     findings,
     truncated: Boolean(queue.length || stopReason),
-    stopReason: stopReason || (queue.length ? "Stopped at the 25-page limit." : ""),
-    scope: "Same-origin localhost pages only. GET requests only; redirects and forms are not submitted. No exploit or injection payloads are sent.",
+    stopReason: stopReason || (queue.length ? `Stopped at the ${options.pageLimit}-page limit.` : ""),
+    scope: options.scope,
   };
+}
+
+async function auditLocalSite(value) {
+  const startUrl = validateLocalAuditUrl(value);
+  return crawlSite(startUrl, requestLocalPage, {
+    pageLimit: MAX_LOCAL_AUDIT_PAGES,
+    depthLimit: MAX_LOCAL_AUDIT_DEPTH,
+    durationMs: MAX_LOCAL_AUDIT_DURATION_MS,
+    scope: "Same-origin localhost pages only. GET requests only; redirects and forms are not submitted. No exploit or injection payloads are sent.",
+  });
+}
+
+async function auditPublicSite(value, { lookup, requestPage = requestPublicPage } = {}) {
+  const startUrl = await validatePublicAuditUrl(value, lookup || dns.promises.lookup);
+  return crawlSite(startUrl, (url) => requestPage(url, lookup || dns.promises.lookup), {
+    pageLimit: MAX_PUBLIC_AUDIT_PAGES,
+    depthLimit: MAX_PUBLIC_AUDIT_DEPTH,
+    durationMs: MAX_PUBLIC_AUDIT_DURATION_MS,
+    scope: "Same-origin public HTTPS pages only. Public IPv4 destinations are validated and pinned per request. GET requests only; redirects and forms are not submitted. No exploit or injection payloads are sent.",
+  });
 }
 
 function extractModelJson(text) {
@@ -1071,6 +1206,7 @@ function createServer({ webDeployment = DEFAULT_WEB_DEPLOYMENT } = {}) {
           model,
           webDeployment,
           localAuditAvailable: !webDeployment,
+          siteAuditAvailable: true,
         });
       } catch (error) {
         jsonResponse(response, error.status || 500, { error: error.message || "Could not read provider settings." });
@@ -1108,6 +1244,27 @@ function createServer({ webDeployment = DEFAULT_WEB_DEPLOYMENT } = {}) {
       } catch (error) {
         if (!response.headersSent && !response.destroyed) {
           jsonResponse(response, error.status || 502, { error: error.message || "Local website audit failed." });
+        }
+      }
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/site-audit") {
+      try {
+        if (!/^application\/json(?:\s*;|$)/i.test(request.headers["content-type"] || "")) {
+          throw Object.assign(new Error("Website check requests must use application/json."), { status: 415 });
+        }
+        const payload = await readJson(request);
+        if (
+          payload.confirmLocalOwnership !== true
+          || payload.confirmNoPayloads !== true
+          || payload.confirmationText !== "I OWN THIS SITE"
+        ) {
+          throw Object.assign(new Error("Confirm that you own or are authorized to check this site, acknowledge the passive GET-only scope, and type I OWN THIS SITE."), { status: 400 });
+        }
+        jsonResponse(response, 200, await auditPublicSite(payload.url));
+      } catch (error) {
+        if (!response.headersSent && !response.destroyed) {
+          jsonResponse(response, error.status || 502, { error: error.message || "Public website check failed." });
         }
       }
       return;
@@ -1231,7 +1388,10 @@ module.exports = {
   buildLogicMap,
   logicChartToMermaid,
   validateLocalAuditUrl,
+  validatePublicAuditUrl,
+  isPublicIPv4,
   auditLocalSite,
+  auditPublicSite,
   extractModelJson,
   extractInteractionText,
   extractGroqText,

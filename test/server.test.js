@@ -7,7 +7,10 @@ const {
   buildLogicMap,
   logicChartToMermaid,
   validateLocalAuditUrl,
+  validatePublicAuditUrl,
+  isPublicIPv4,
   auditLocalSite,
+  auditPublicSite,
   extractModelJson,
   extractInteractionText,
   extractGroqText,
@@ -137,6 +140,43 @@ test("restricts local website audit URLs to exact loopback hosts", () => {
   }
 });
 
+test("restricts public website checks to HTTPS hosts resolving to public IPv4", async () => {
+  const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
+  const url = await validatePublicAuditUrl("https://example.com/path?token=removed#section", publicLookup);
+  assert.equal(url.href, "https://example.com/path");
+  assert.equal(isPublicIPv4("93.184.216.34"), true);
+  for (const address of [
+    "10.0.0.1",
+    "127.0.0.1",
+    "169.254.169.254",
+    "192.168.1.1",
+    "172.20.0.1",
+    "100.64.0.1",
+    "198.18.0.1",
+    "224.0.0.1",
+  ]) {
+    assert.equal(isPublicIPv4(address), false, `${address} must not be public`);
+  }
+  for (const value of [
+    "http://example.com/",
+    "https://127.0.0.1/",
+    "https://localhost/",
+    "https://example.com:8443/",
+    "https://user:pass@example.com/",
+    "https://example.local/",
+  ]) {
+    await assert.rejects(validatePublicAuditUrl(value, publicLookup), /Only public HTTPS/);
+  }
+  await assert.rejects(
+    validatePublicAuditUrl("https://example.com/", async () => [{ address: "10.0.0.5", family: 4 }]),
+    /public IPv4 address/,
+  );
+  await assert.rejects(
+    validatePublicAuditUrl("https://example.com/", async () => [{ address: "2606:4700:4700::1111", family: 6 }]),
+    /public IPv4 address/,
+  );
+});
+
 test("crawls a bounded same-origin localhost site using GET only", async (t) => {
   const requests = [];
   const site = require("node:http").createServer((request, response) => {
@@ -166,6 +206,33 @@ test("crawls a bounded same-origin localhost site using GET only", async (t) => 
   assert.equal(requests.length, 4);
 });
 
+test("crawls an authorized public HTTPS site passively and stays same-origin", async () => {
+  const requests = [];
+  const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
+  const requestPage = async (url) => {
+    requests.push(url.href);
+    if (url.pathname === "/") {
+      return {
+        status: 200,
+        headers: { "content-type": "text/html", "set-cookie": ["session=demo"] },
+        body: '<title>Demo site</title><a href="/about">About</a><a href="https://other.example/path">External</a>',
+      };
+    }
+    return {
+      status: 200,
+      headers: { "content-type": "text/html", "content-security-policy": "default-src 'self'" },
+      body: "<title>About</title>",
+    };
+  };
+  const result = await auditPublicSite("https://example.com/", { lookup, requestPage });
+  assert.equal(result.pageCount, 2);
+  assert.deepEqual(requests, ["https://example.com/", "https://example.com/about"]);
+  assert.equal(result.pages[0].title, "Demo site");
+  assert.equal(result.pages[1].title, "About");
+  assert.match(result.scope, /public HTTPS pages only/);
+  assert.ok(result.findings.some((finding) => finding.title.includes("HttpOnly")));
+});
+
 test("local website audit endpoint requires both explicit confirmations", async (t) => {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -178,6 +245,37 @@ test("local website audit endpoint requires both explicit confirmations", async 
   });
   assert.equal(response.status, 400);
   assert.match((await response.json()).error, /Confirm local ownership/);
+});
+
+test("hosted site audit requires JSON, permission, and passive-scan confirmations", async (t) => {
+  const server = createServer({ webDeployment: true });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const health = await (await fetch(`${base}/api/health`)).json();
+  assert.equal(health.siteAuditAvailable, true);
+  assert.equal(health.localAuditAvailable, false);
+
+  const missingConfirmations = await fetch(`${base}/api/site-audit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: "https://example.com/" }),
+  });
+  assert.equal(missingConfirmations.status, 400);
+  assert.match((await missingConfirmations.json()).error, /Confirm that you own/);
+
+  const localTarget = await fetch(`${base}/api/site-audit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: "https://127.0.0.1/",
+      confirmLocalOwnership: true,
+      confirmNoPayloads: true,
+      confirmationText: "I OWN THIS SITE",
+    }),
+  });
+  assert.equal(localTarget.status, 400);
+  assert.match((await localTarget.json()).error, /Only public HTTPS/);
 });
 
 test("serves generated JavaScript logic maps", async (t) => {
@@ -294,6 +392,7 @@ test("serves the local UI and reports Gemini configuration without leaking the k
     model: "gemini-3.8-flash",
     webDeployment: false,
     localAuditAvailable: true,
+    siteAuditAvailable: true,
   });
   const home = await fetch(base);
   assert.equal(home.status, 200);
@@ -543,6 +642,7 @@ test("uses Groq's OpenAI-compatible API with the selected provider key", async (
     model: "openai/gpt-oss-20b",
     webDeployment: false,
     localAuditAvailable: true,
+    siteAuditAvailable: true,
   });
   const response = await originalFetch(`${base}/api/scan`, {
     method: "POST",

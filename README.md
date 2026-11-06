@@ -23,6 +23,8 @@ Choose **Flowchart** beside any uploaded text file to build a local diagram. Jav
 
 The optional local website check accepts only `localhost`, `127.0.0.1`, or `[::1]` URLs and does not require an AI API key. It performs at most 25 same-origin GET requests within 30 seconds, follows links no more than two levels deep, and checks basic response security headers and cookie flags. It does not follow redirects, submit forms, attempt credentials, or send attack/injection payloads. The app requires ownership/authorization and passive-scan confirmations plus the phrase `LOCALHOST ONLY`. GET requests can still have side effects on poorly designed sites; this feature is a basic passive check, not a full penetration test.
 
+The hosted web demo provides a separate public website check for sites you own or have permission to assess. It accepts standard-port HTTPS domains only, requires the ownership/passive-check confirmations and the phrase `I OWN THIS SITE`, and rejects localhost, IP-literal, private, and non-public destinations. It checks at most 8 same-origin pages within 20 seconds, follows links no more than two levels deep, reads headers and HTML using GET requests only, and does not follow redirects, submit forms, or send exploit/injection payloads. DNS results are checked and public IPv4 destinations are pinned for each request. The hosted service cannot crawl localhost on your computer. GET requests can still have side effects on poorly designed websites; this is a basic passive check, not a full penetration test.
+
 ## First launch
 
 1. Create an API key with [Google AI Studio](https://aistudio.google.com/apikey) or [GroqCloud](https://console.groq.com/keys).
@@ -42,7 +44,7 @@ The repository includes a Render Blueprint in `render.yaml`. To deploy it, push 
 
 The hosted app does not use a shared provider API key. Each visitor enters their own Gemini or Groq key in **API key settings**; the key stays in that browser tab's memory and is sent to the app over HTTPS for AI requests. It is not stored by the app, and reloading or closing the tab clears it. Source files are relayed to the chosen AI provider for review. Do not configure `GEMINI_API_KEY` or `GROQ_API_KEY` as public service secrets. Render's free service may sleep when idle and take extra time to start.
 
-Hosted mode disables the localhost website check because a hosted server cannot access a visitor's computer. Localhost auditing remains available in the desktop app.
+Hosted mode cannot access a visitor's localhost, so it offers a separate public HTTPS website check instead. Localhost auditing remains available in the desktop app.
 
 The default models are `gemini-3.8-flash` for Gemini and `openai/gpt-oss-20b` for GroqCloud. For Groq, `openai/` identifies the model publisher/namespace; requests are still sent to GroqCloud using your Groq API key. The UI labels this explicitly as “GroqCloud · GPT-OSS 20B (OpenAI model).” Set `$env:GEMINI_MODEL` or `$env:GROQ_MODEL` before launch to override them. The server uses the selected provider's API and does not save uploaded source files. Gemini requests set `store: false`.
 

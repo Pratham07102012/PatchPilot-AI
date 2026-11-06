@@ -25,6 +25,8 @@ const settingsCopy = document.querySelector("#settings-copy");
 const removeKeyButton = document.querySelector("#remove-key");
 const localAuditPanel = document.querySelector(".local-audit-panel");
 const privacyNote = document.querySelector("#privacy-note");
+const siteAuditCopy = document.querySelector("#site-audit-copy");
+const localAuditUrlLabel = document.querySelector("#local-audit-url-label");
 const localAuditForm = document.querySelector("#local-audit-form");
 const localAuditUrl = document.querySelector("#local-audit-url");
 const localAuditReviewButton = document.querySelector("#local-audit-review");
@@ -32,6 +34,12 @@ const localAuditResults = document.querySelector("#local-audit-results");
 const localAuditDialog = document.querySelector("#local-audit-confirm");
 const localAuditConfirmForm = document.querySelector("#local-audit-confirm-form");
 const confirmTarget = document.querySelector("#confirm-target");
+const confirmSummary = document.querySelector("#confirm-summary");
+const confirmBadge = document.querySelector("#confirm-badge");
+const confirmWarning = document.querySelector("#confirm-warning");
+const confirmOwnershipLabel = document.querySelector("#confirm-ownership-label");
+const confirmPassiveLabel = document.querySelector("#confirm-passive-label");
+const confirmPhraseLabel = document.querySelector("#confirm-phrase-label");
 const confirmOwnership = document.querySelector("#confirm-ownership");
 const confirmPassive = document.querySelector("#confirm-passive");
 const confirmPhrase = document.querySelector("#confirm-phrase");
@@ -408,10 +416,13 @@ function getProviderHeaders() {
   };
 }
 
-async function post(path, body) {
+async function post(path, body, includeProviderKey = true) {
   const response = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getProviderHeaders() },
+    headers: {
+      "Content-Type": "application/json",
+      ...(includeProviderKey ? getProviderHeaders() : {}),
+    },
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({}));
@@ -857,9 +868,26 @@ localAuditForm.addEventListener("submit", (event) => {
   if (!localAuditForm.reportValidity()) return;
   pendingLocalAuditUrl = localAuditUrl.value.trim();
   confirmTarget.textContent = pendingLocalAuditUrl;
+  const phrase = isWebDeployment ? "I OWN THIS SITE" : "LOCALHOST ONLY";
+  confirmSummary.replaceChildren(
+    document.createTextNode(isWebDeployment
+      ? "The passive check will make up to 8 GET requests to "
+      : "The audit will make up to 25 GET requests to "),
+    confirmTarget,
+    document.createTextNode(isWebDeployment
+      ? ", at most two link levels deep. It reads response headers and HTML only."
+      : ", at most two link levels deep. It reads response headers and HTML only."),
+  );
   confirmOwnership.checked = false;
   confirmPassive.checked = false;
   confirmPhrase.value = "";
+  const phraseLabel = document.createElement("strong");
+  phraseLabel.textContent = phrase;
+  confirmPhraseLabel.replaceChildren(
+    document.createTextNode("Type "),
+    phraseLabel,
+    document.createTextNode(" to enable the check"),
+  );
   confirmLocalAuditButton.disabled = true;
   localAuditDialog.showModal();
 });
@@ -873,7 +901,7 @@ localAuditConfirmForm.addEventListener("submit", async (event) => {
   if (
     !confirmOwnership.checked
     || !confirmPassive.checked
-    || confirmPhrase.value.trim() !== "LOCALHOST ONLY"
+    || confirmPhrase.value.trim() !== (isWebDeployment ? "I OWN THIS SITE" : "LOCALHOST ONLY")
   ) return;
   localAuditDialog.close("confirmed");
   await runLocalAudit();
@@ -882,28 +910,30 @@ localAuditConfirmForm.addEventListener("submit", async (event) => {
 function updateLocalAuditConfirmation() {
   confirmLocalAuditButton.disabled = !confirmOwnership.checked
     || !confirmPassive.checked
-    || confirmPhrase.value.trim() !== "LOCALHOST ONLY";
+    || confirmPhrase.value.trim() !== (isWebDeployment ? "I OWN THIS SITE" : "LOCALHOST ONLY");
 }
 
 async function runLocalAudit() {
   localAuditReviewButton.disabled = true;
   localAuditReviewButton.textContent = "Auditing…";
   localAuditResults.replaceChildren();
-  addText(localAuditResults, "p", "audit-note", "Checking localhost pages and response headers…");
+  addText(localAuditResults, "p", "audit-note", isWebDeployment
+    ? "Checking public HTTPS pages and response headers…"
+    : "Checking localhost pages and response headers…");
   try {
-    const audit = await post("/api/local-audit", {
+    const audit = await post(isWebDeployment ? "/api/site-audit" : "/api/local-audit", {
       url: pendingLocalAuditUrl,
       confirmLocalOwnership: confirmOwnership.checked,
       confirmNoPayloads: confirmPassive.checked,
       confirmationText: confirmPhrase.value.trim(),
-    });
+    }, !isWebDeployment);
     renderLocalAudit(audit);
   } catch (error) {
     localAuditResults.replaceChildren();
     addText(localAuditResults, "p", "audit-error", error.message);
   } finally {
     localAuditReviewButton.disabled = false;
-    localAuditReviewButton.textContent = "Review safety & continue";
+    localAuditReviewButton.textContent = isWebDeployment ? "Review permission & continue" : "Review safety & continue";
   }
 }
 
@@ -941,10 +971,23 @@ Promise.all([
 ])
   .then(([health, desktopStatus]) => {
     isWebDeployment = Boolean(health.webDeployment && !window.patchPilot);
-    localAuditPanel.hidden = !health.localAuditAvailable;
+    localAuditPanel.hidden = isWebDeployment
+      ? !health.siteAuditAvailable
+      : !health.localAuditAvailable;
     if (isWebDeployment) {
       settingsCopy.textContent = "Choose your provider and enter your own API key. It is held in this tab's memory and sent over HTTPS to PatchPilot, then to the provider for your requests. PatchPilot does not save it; reloading or closing the tab clears it.";
       privacyNote.textContent = "Files are sent to the selected AI provider · Not saved by PatchPilot";
+      localAuditUrl.placeholder = "https://example.com";
+      localAuditUrlLabel.textContent = "Public HTTPS website URL";
+      localAuditPanel.querySelector(".workspace-head .file-limit").textContent = "PUBLIC HTTPS · PASSIVE GET ONLY";
+      siteAuditCopy.textContent = "Check a public HTTPS website that you own or have permission to assess. PatchPilot checks basic response security headers and cookie settings, follows same-origin links only, and never submits forms or sends exploit payloads. Hosted mode cannot reach localhost or private networks.";
+      localAuditReviewButton.textContent = "Review permission & continue";
+      confirmBadge.textContent = "PUBLIC WEBSITE SAFETY CHECK";
+      document.querySelector("#local-audit-confirm-title").textContent = "Confirm permission to check this website";
+      confirmWarning.textContent = "It will not submit forms, try passwords, or send attack/injection payloads. Redirects and links outside this exact origin are not followed. Requests are limited to public HTTPS websites and may still have side effects on poorly designed sites.";
+      confirmOwnershipLabel.lastChild.textContent = " I own this website or have permission to check it.";
+      confirmPassiveLabel.lastChild.textContent = " I understand this is a passive, GET-only check with no payloads or form submissions.";
+      confirmLocalAuditButton.textContent = "Start passive check";
     }
     const settings = desktopStatus || health;
     setKeyStatus(settings.configured, settings.provider);
